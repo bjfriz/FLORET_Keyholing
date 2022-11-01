@@ -17,7 +17,7 @@ MyPhantom(MyPhantom < 0) = 0.5;
 %% Now, create image signal decay - RF induced Decay
 FA = 1;
 %Uniform Flip Angle
-anglemap = ones(PhantSize,PhantSize,PhantSize) *FA;
+%anglemap = ones(PhantSize,PhantSize,PhantSize) *FA;
 % % % % % % %Sharply Varying flip angles
 % BoxSize = PhantSize/2;
 % Cube = ones(BoxSize,BoxSize,BoxSize);
@@ -27,15 +27,15 @@ anglemap = ones(PhantSize,PhantSize,PhantSize) *FA;
 % Oct4 = 1.1*Cube;
 % anglemap = cat(1,cat(2,cat(3,Oct1,Oct2),cat(3,Oct3,Oct4)),cat(2,cat(3,Oct3,Oct4),cat(3,Oct1,Oct2)));
 % % % % % % %Smoothly Varying flip angles
-% x = 1:PhantSize;
-% filt = (FA^(1/3))*exp(-((x-PhantSize/2).^2)/2*(0.03).^2);
-% [X,Y,Z] = meshgrid(filt,filt,filt);
-% anglemap = X.*Y.*Z;
+ x = 1:PhantSize;
+ filt = (FA^(1/3))*exp(-((x-PhantSize/2).^2)/2*(0.03).^2);
+ [X,Y,Z] = meshgrid(filt,filt,filt);
+ anglemap = X.*Y.*Z;
 
 %% Now, create image signal decay - T1 induced Decay
 T1 = 30;
 %Uniform Flip Angle
-T1map = ones(PhantSize,PhantSize,PhantSize) * T1;
+%T1map = ones(PhantSize,PhantSize,PhantSize) * T1;
 % % % % % %Sharply Varying T1
 % BoxSize = PhantSize/2;
 % Cube = ones(BoxSize,BoxSize,BoxSize);
@@ -45,10 +45,10 @@ T1map = ones(PhantSize,PhantSize,PhantSize) * T1;
 % Oct4 = 34*Cube;
 % T1map = cat(1,cat(2,cat(3,Oct1,Oct2),cat(3,Oct3,Oct4)),cat(2,cat(3,Oct3,Oct4),cat(3,Oct1,Oct2)));
 % % % % % %Smoothly Varying T1
-% x = 1:PhantSize;
-% filt = (T1^(1/3))*exp(-((x-PhantSize/2).^2)/2*(0.03).^2);
-% [X,Y,Z] = meshgrid(filt,filt,filt);
-% T1map = X.*Y.*Z;
+ x = 1:PhantSize;
+ filt = (T1^(1/3))*exp(-((x-PhantSize/2).^2)/2*(0.03).^2);
+ [X,Y,Z] = meshgrid(filt,filt,filt);
+ T1map = X.*Y.*Z;
 %% Create Signal Decay Matrix
 TR = 0.008; %8 ms between gaseous excitations
 SigDecay = cosd(anglemap).*exp(-TR./T1map);
@@ -68,7 +68,7 @@ pix_traj = round(pix_traj);
 pix_traj(pix_traj>PhantSize) = PhantSize;
 %since trajectories were rounded to nearest point, need to go back to
 %unitless trajectories with the rounded points:
-reco_traj = (pix_traj - PhantSize/2)/ImageSize;
+reco_traj = (pix_traj - PhantSize/2 -1)/ImageSize;
 %if interested, can visualize trajectories:
 %unaltered
 Keyhole_Tools.disp_traj(traj,false,false,100);
@@ -95,7 +95,7 @@ imagesc(abs(raw));
 colormap(gray);
 
 %% Reconstruct Image
-%Image recon  requires data in columns - reshape here
+%Image recon requires data in columns - reshape here
 reco_raw = reshape(raw,1,[])';
 reco_traj_C = Keyhole_Tools.column_traj(reco_traj);
 
@@ -107,7 +107,90 @@ reco_raw(rad>0.5) = [];
 %Call Image reconstruction - Want to make sure that this works before
 %starting the keyhole process.
 Full_Im = AllinOne_Recon.base_floret_recon(ImageSize,reco_raw,reco_traj_C);
-imslice(abs(Full_Im));
+imslice(abs(Full_Im),'Original Image Recon');
 
 %% Keyhole Data
+%Number of keys, 2
+NumKeys = 2;
+maxRad = .025;
 
+%Number of Projections(spirals), and how many in each key
+NumSpirals = 1238;
+SpiralsInKey = NumSpirals/NumKeys; %619 spirals in each key
+
+%calculate the radius of points in projection rad = sqrt(...)
+rad = squeeze(sqrt(reco_traj(1,:,:).^2+reco_traj(2,:,:).^2+reco_traj(3,:,:).^2));
+
+%seperate keys from key hole
+keyhole = raw;
+keyhole(rad<maxRad) = nan;
+
+%Create the keys
+key1 = keyhole;
+key2 = keyhole;
+for i = 1:(NumSpirals/2)
+    key1(rad(:,i)<maxRad,1:(NumSpirals/2)) = raw(rad(:,i)<maxRad,1:(NumSpirals/2));
+    key2(rad(:,i+NumSpirals/2)<maxRad,(NumSpirals/2+1):NumSpirals) = raw(rad(:,i+NumSpirals/2)<maxRad,(NumSpirals/2+1):NumSpirals);
+end
+
+%Average k0 of key
+key1av = mean(abs(raw(1,1:(NumSpirals/2))));
+key2av = mean(abs(raw(1,(SpiralsInKey+1):NumSpirals)));
+
+%Average keyhole (high frequency data) with each keys k0
+%keyholepoint * (average k0/k0 for that column)
+avdKey1 = key1;
+avdKey2 = key2;
+for i = 1:NumSpirals
+    avdKey1(rad(:,i)>maxRad,i) = keyhole(rad(:,i)>maxRad,i)*(key1av/raw(1,i));
+    avdKey2(rad(:,i)>maxRad,i) = keyhole(rad(:,i)>maxRad,i)*(key2av/raw(1,i));
+end
+
+%reconstruct the keys
+%Image recon requires data in columns - reshape here
+reco_Key1 = reshape(avdKey1,1,[])';
+reco_Key2 = reshape(avdKey2,1,[])';
+reco_traj_C1 = Keyhole_Tools.column_traj(reco_traj);
+reco_traj_C2 = Keyhole_Tools.column_traj(reco_traj);
+
+%Make sure there are no NaN points
+reco_traj_C1(isnan(avdKey1),:) = [];
+reco_Key1(isnan(avdKey1)) = [];
+reco_traj_C2(isnan(avdKey2),:) = [];
+reco_Key2(isnan(avdKey2)) = [];
+
+Full_Key1 = AllinOne_Recon.base_floret_recon(ImageSize,reco_Key1,reco_traj_C1);
+imslice(abs(Full_Key1),'Key 1 image recon');
+clim([0 max(abs(Full_Key1(:)))]);
+
+Full_Key2 = AllinOne_Recon.base_floret_recon(ImageSize,reco_Key2,reco_traj_C2);
+imslice(abs(Full_Key2),'Key 2 image recon');
+clim([0 max(abs(Full_Key1(:)))]);
+%figure(5);montage(abs(Full_Key2),Indices=25:75);clim([0 max(abs(Full_Key1(:)))]);
+
+%% Finding c1
+c1 = (Full_Key2./Full_Key1).^(1/(NumSpirals/2));
+
+figure('Name','Calculated decay');montage(real(c1));clim([.999 max(abs(SigDecay(:)))]);
+colormap("jet")
+imslice(abs(c1),'Calculated decay');
+clim([.999 max(abs(SigDecay(:)))]);
+colormap("jet")
+
+mask = MyPhantom;mask(MyPhantom>0) = 1;
+SigDecay = SigDecay.*mask;
+figure('Name','Expected Decay');montage(real(SigDecay));clim([0.999 max(abs(SigDecay(:)))])
+colormap("jet")
+imslice(abs(SigDecay),'Expected Decay');
+clim([.999 max(abs(SigDecay(:)))]);
+colormap("jet")
+
+%% Finding the fractional signal Attenuation
+attenuation = 1 - (1/NumSpirals)*((1-(c1.^NumSpirals))./(1-c1));
+figure(31);montage(real(attenuation));
+%% reconstruct unattenuated image (recovered from original image and key images)
+% image = original image/ (1-attenuation)
+% image = original image * ((number spirals *(1-c1))/(1-(c1^number spirals)))
+unattImage1 = Full_Im./(1-attenuation);
+imslice(abs(unattImage1),'Corrected Image');
+clim([0 max(abs(Full_Im(:)))]);
